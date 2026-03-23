@@ -1,0 +1,18 @@
+AGENT_ISSUE = "agent-issue"
+AGENT_REVIEWABLE = "agent-reviewable"
+AGENT_CHANGED = "agent-changed"
+AGENT_APPROVED = "agent-approved"
+
+STATE_LABELS = [
+    AGENT_ISSUE,
+    AGENT_REVIEWABLE,
+    AGENT_CHANGED,
+    AGENT_APPROVED,
+]
+
+RUNNABLE_STATES = [
+    AGENT_ISSUE,
+    AGENT_REVIEWABLE,
+    AGENT_CHANGED,
+]
+

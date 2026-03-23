@@ -1,0 +1,23 @@
+database:
+  path: data/agentflow.db
+
+scheduler:
+  enabled: true
+  poll_interval_seconds: 60
+
+codex:
+  command: codex
+  args: []
+  timeout_seconds: 1800
+
+ui:
+  refresh_seconds: 5
+
+run_logs_dir: data/runs
+
+repos:
+  - name: demo
+    full_name: sundy-li/agentflow
+    forked: your-github-user/agentflow
+    default_branch: main
+    enabled: true

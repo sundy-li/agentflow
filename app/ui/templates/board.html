@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agentflow Board</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" />
+    <style>
+      :root {
+        --bg: #f5f3ef;
+        --ink: #10231e;
+        --accent: #0d6f5f;
+        --card: #ffffff;
+        --line: #d9d4cd;
+      }
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", sans-serif;
+        color: var(--ink);
+        background: radial-gradient(circle at 8% 5%, #e5efe7 0%, var(--bg) 45%);
+      }
+      .shell {
+        max-width: 1300px;
+        margin: 20px auto;
+        padding: 0 16px 24px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+      .meta {
+        margin-bottom: 16px;
+        color: #375149;
+      }
+      .board {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 14px;
+      }
+      .column {
+        background: rgba(255, 255, 255, 0.75);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 10px;
+      }
+      .column h2 {
+        margin: 0 0 8px;
+        font-size: 16px;
+      }
+      .task {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 8px;
+      }
+      .task a {
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 700;
+      }
+      .task small {
+        display: block;
+        margin-top: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <h1>Agentflow Board</h1>
+      <div class="meta">
+        Repo: <strong>{{ repo_name }}</strong> |
+        Refresh: <strong>{{ refresh_seconds }}s</strong> |
+        Updated: <span id="updatedAt">-</span>
+      </div>
+      <div class="board" id="board">
+        <div class="column" data-state="agent-issue"><h2>agent-issue</h2><div class="tasks"></div></div>
+        <div class="column" data-state="agent-reviewable"><h2>agent-reviewable</h2><div class="tasks"></div></div>
+        <div class="column" data-state="agent-changed"><h2>agent-changed</h2><div class="tasks"></div></div>
+        <div class="column" data-state="agent-approved"><h2>agent-approved</h2><div class="tasks"></div></div>
+      </div>
+    </div>
+    <script>
+      window.AGENTFLOW_REFRESH_SECONDS = {{ refresh_seconds }};
+    </script>
+    <script src="/static/board.js"></script>
+  </body>
+</html>
+
