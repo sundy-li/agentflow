@@ -46,6 +46,12 @@ cp config/agentflow.example.yaml config/agentflow.yaml
 AGENTFLOW_CONFIG=config/agentflow.yaml uv run uvicorn app.main:create_app --factory --reload
 ```
 
+Local CLI board:
+
+```bash
+uv run python -m app.cli board --config config/agentflow.yaml
+```
+
 4. Open:
 - `http://127.0.0.1:8000/healthz`
 - `http://127.0.0.1:8000/board`

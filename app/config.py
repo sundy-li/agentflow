@@ -13,6 +13,8 @@ class DatabaseSettings(BaseModel):
 class SchedulerSettings(BaseModel):
     enabled: bool = True
     poll_interval_seconds: int = 60
+    max_parallel_tasks: int = Field(default=4, ge=1)
+    review_latency_hours: float = Field(default=0, ge=0)
 
 
 class CodexSettings(BaseModel):
@@ -29,6 +31,7 @@ class RepoSettings(BaseModel):
     name: str = "default"
     full_name: str = "owner/repo"
     forked: Optional[str] = None
+    workspace: Optional[str] = None
     default_branch: str = "main"
     enabled: bool = False
 

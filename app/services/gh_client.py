@@ -1,8 +1,9 @@
 import json
+import re
 import subprocess
 from typing import Dict, List, Optional
 
-from app.constants import AGENT_CHANGED, AGENT_ISSUE, AGENT_REVIEWABLE
+from app.constants import STATE_LABELS
 
 
 class GHCommandError(RuntimeError):
@@ -14,31 +15,49 @@ class GHClient:
         self.timeout_seconds = timeout_seconds
 
     def list_agent_issues(self, repo_full_name: str) -> List[Dict]:
+        return self._list_agent_items(repo_full_name, "issue")
+
+    def list_agent_prs(self, repo_full_name: str) -> List[Dict]:
+        return self._list_agent_items(repo_full_name, "pr")
+
+    def list_open_pr_links(self, repo_full_name: str) -> List[Dict]:
         command = [
             "gh",
-            "issue",
+            "pr",
             "list",
             "--repo",
             repo_full_name,
             "--state",
             "open",
-            "--label",
-            AGENT_ISSUE,
             "--limit",
-            "200",
+            "500",
             "--json",
-            "number,title,url,labels,assignees,updatedAt",
+            "number,body",
         ]
         output = self._run(command)
         payload = json.loads(output or "[]")
-        return [self._normalize_item(item, "issue") for item in payload]
+        linked_prs = []
+        for item in payload:
+            linked_issue_numbers = self._parse_linked_issue_numbers(repo_full_name, item.get("body", ""))
+            if not linked_issue_numbers:
+                continue
+            linked_prs.append(
+                {
+                    "number": int(item["number"]),
+                    "linked_issue_numbers": linked_issue_numbers,
+                }
+            )
+        return linked_prs
 
-    def list_agent_prs(self, repo_full_name: str) -> List[Dict]:
+    def _list_agent_items(self, repo_full_name: str, item_type: str) -> List[Dict]:
         merged = {}
-        for label in [AGENT_REVIEWABLE, AGENT_CHANGED]:
+        json_fields = "number,title,url,labels,assignees,updatedAt"
+        if item_type == "pr":
+            json_fields = json_fields + ",headRefOid"
+        for label in STATE_LABELS:
             command = [
                 "gh",
-                "pr",
+                item_type,
                 "list",
                 "--repo",
                 repo_full_name,
@@ -49,12 +68,12 @@ class GHClient:
                 "--limit",
                 "200",
                 "--json",
-                "number,title,url,labels,assignees,updatedAt",
+                json_fields,
             ]
             output = self._run(command)
             payload = json.loads(output or "[]")
             for item in payload:
-                normalized = self._normalize_item(item, "pr")
+                normalized = self._normalize_item(item, item_type)
                 merged[int(normalized["number"])] = normalized
         return [merged[key] for key in sorted(merged.keys())]
 
@@ -119,5 +138,21 @@ class GHClient:
             "labels": labels,
             "assignee": assignee,
             "updated_at": item.get("updatedAt"),
+            "head_sha": item.get("headRefOid") if github_type == "pr" else None,
         }
 
+    @staticmethod
+    def _parse_linked_issue_numbers(repo_full_name: str, body: str) -> List[int]:
+        if not body:
+            return []
+        repo_pattern = re.escape(repo_full_name)
+        pattern = re.compile(
+            r"(?i)\b(?:fix(?:es|ed)?|close(?:s|d)?|resolve(?:s|d)?)\s+((?:{0})?#\d+)".format(repo_pattern)
+        )
+        issue_numbers = []
+        for match in pattern.finditer(body):
+            reference = match.group(1)
+            if "/" in reference and not reference.startswith(repo_full_name + "#"):
+                continue
+            issue_numbers.append(int(reference.split("#", 1)[1]))
+        return sorted(set(issue_numbers))

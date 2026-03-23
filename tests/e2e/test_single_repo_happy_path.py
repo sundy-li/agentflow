@@ -73,18 +73,16 @@ def test_single_repo_happy_path(tmp_path):
     worker = WorkerService(repository, fake_gh, fake_runner)
 
     worker.process_one(settings.repos[0])
-    # Keep issue task from being selected again in this test.
-    repository.set_task_stale(issue_task["id"], True)
     worker.process_one(settings.repos[0])
 
     updated_issue = repository.get_task(issue_task["id"])
     updated_pr = repository.get_task(pr_task["id"])
-    assert updated_issue["state"] == "agent-reviewable"
+    assert updated_issue["state"] == "agent-issue"
+    assert updated_issue["has_open_linked_pr"] is True
     assert updated_pr["state"] == "agent-approved"
 
     client = TestClient(app)
     board = client.get("/api/board").json()
-    assert any(task["number"] == 100 for task in board["columns"]["agent-reviewable"])
+    assert any(task["number"] == 100 for task in board["columns"]["agent-issue"])
     assert any(task["number"] == 101 for task in board["columns"]["agent-approved"])
-    assert len(fake_gh.updated) == 2
-
+    assert len(fake_gh.updated) == 1

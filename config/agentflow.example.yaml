@@ -4,6 +4,8 @@ database:
 scheduler:
   enabled: true
   poll_interval_seconds: 60
+  max_parallel_tasks: 4
+  review_latency_hours: 0
 
 codex:
   command: codex
@@ -19,5 +21,6 @@ repos:
   - name: demo
     full_name: sundy-li/agentflow
     forked: your-github-user/agentflow
+    workspace: /absolute/path/to/your/worktree
     default_branch: main
     enabled: true

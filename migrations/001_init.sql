@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   url TEXT NOT NULL,
   labels_json TEXT NOT NULL DEFAULT '[]',
   state TEXT NOT NULL,
+  pr_head_sha TEXT,
+  pr_last_push_observed_at TEXT,
   assignee TEXT,
   is_stale INTEGER NOT NULL DEFAULT 0,
   last_synced_at TEXT,
@@ -58,4 +60,3 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_task_id ON runs(task_id, id);
-

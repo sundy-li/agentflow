@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+from app.constants import AGENT_REVIEWABLE
 from app.db import connect_db
 
 
@@ -52,30 +53,40 @@ class Repository:
         url: str,
         labels: List[str],
         state: str,
+        pr_head_sha: Optional[str] = None,
+        pr_last_push_observed_at: Optional[str] = None,
         assignee: Optional[str] = None,
         last_synced_at: Optional[str] = None,
         is_stale: bool = False,
+        has_open_linked_pr: bool = False,
+        linked_pr_numbers: Optional[List[int]] = None,
     ) -> Dict:
         now = utc_now()
         labels_json = json.dumps(sorted(set(labels)))
+        linked_pr_numbers_json = json.dumps(sorted({int(number) for number in linked_pr_numbers or []}))
         with connect_db(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO tasks(
                   repo_id, github_type, github_number, title, url,
-                  labels_json, state, assignee, is_stale, last_synced_at,
+                  labels_json, state, pr_head_sha, pr_last_push_observed_at,
+                  assignee, is_stale, last_synced_at, has_open_linked_pr, linked_pr_numbers_json,
                   created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(repo_id, github_type, github_number)
                 DO UPDATE SET
                   title = excluded.title,
                   url = excluded.url,
                   labels_json = excluded.labels_json,
                   state = excluded.state,
+                  pr_head_sha = excluded.pr_head_sha,
+                  pr_last_push_observed_at = excluded.pr_last_push_observed_at,
                   assignee = excluded.assignee,
                   is_stale = excluded.is_stale,
                   last_synced_at = excluded.last_synced_at,
+                  has_open_linked_pr = excluded.has_open_linked_pr,
+                  linked_pr_numbers_json = excluded.linked_pr_numbers_json,
                   updated_at = excluded.updated_at
                 """,
                 (
@@ -86,9 +97,13 @@ class Repository:
                     url,
                     labels_json,
                     state,
+                    pr_head_sha,
+                    pr_last_push_observed_at,
                     assignee,
                     int(is_stale),
                     last_synced_at,
+                    int(has_open_linked_pr),
+                    linked_pr_numbers_json,
                     now,
                     now,
                 ),
@@ -213,12 +228,52 @@ class Repository:
             )
             conn.commit()
 
-    def claim_next_task(self, repo_id: int, states: List[str], worker_id: str, lock_seconds: int = 300) -> Optional[Dict]:
+    def set_task_linked_prs(self, task_id: int, linked_pr_numbers: Optional[List[int]]) -> Dict:
+        now = utc_now()
+        normalized = sorted({int(number) for number in linked_pr_numbers or []})
+        with connect_db(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE tasks
+                SET has_open_linked_pr = ?, linked_pr_numbers_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (int(bool(normalized) or linked_pr_numbers is None), json.dumps(normalized), now, task_id),
+            )
+            conn.commit()
+        task = self.get_task(task_id)
+        if task is None:
+            raise ValueError("Task not found: {0}".format(task_id))
+        return task
+
+    def claim_next_task(
+        self,
+        repo_id: int,
+        states: List[str],
+        worker_id: str,
+        lock_seconds: int = 300,
+        review_latency_hours: float = 0,
+    ) -> Optional[Dict]:
         if not states:
             return None
         now = utc_now()
         lock_until = (datetime.utcnow() + timedelta(seconds=lock_seconds)).replace(microsecond=0).isoformat() + "Z"
         placeholders = ",".join(["?"] * len(states))
+        latency_filter = ""
+        parameters = [repo_id] + list(states) + [now]
+        if float(review_latency_hours) > 0:
+            review_ready_before = (
+                datetime.utcnow() - timedelta(hours=float(review_latency_hours))
+            ).replace(microsecond=0).isoformat() + "Z"
+            latency_filter = """
+                  AND (
+                    state != ?
+                    OR github_type != 'pr'
+                    OR pr_last_push_observed_at IS NULL
+                    OR pr_last_push_observed_at <= ?
+                  )
+            """
+            parameters.extend([AGENT_REVIEWABLE, review_ready_before])
 
         with connect_db(self.db_path) as conn:
             candidate = conn.execute(
@@ -227,11 +282,13 @@ class Repository:
                 WHERE repo_id = ?
                   AND state IN ({0})
                   AND is_stale = 0
+                  AND (github_type != 'issue' OR has_open_linked_pr = 0)
                   AND (locked_until IS NULL OR locked_until < ?)
+                  {1}
                 ORDER BY updated_at ASC, id ASC
                 LIMIT 1
-                """.format(placeholders),
-                [repo_id] + list(states) + [now],
+                """.format(placeholders, latency_filter),
+                parameters,
             ).fetchone()
             if candidate is None:
                 return None
@@ -263,15 +320,37 @@ class Repository:
             )
             conn.commit()
 
-    def create_run(self, task_id: int, run_type: str, prompt: str, command: str, started_at: Optional[str] = None) -> int:
+    def clear_task_locks(self, repo_id: int) -> int:
+        now = utc_now()
+        with connect_db(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET locked_by = NULL, locked_until = NULL, updated_at = ?
+                WHERE repo_id = ? AND (locked_by IS NOT NULL OR locked_until IS NOT NULL)
+                """,
+                (now, repo_id),
+            )
+            conn.commit()
+        return max(int(cursor.rowcount), 0)
+
+    def create_run(
+        self,
+        task_id: int,
+        run_type: str,
+        prompt: str,
+        command: str,
+        started_at: Optional[str] = None,
+        output_path: Optional[str] = None,
+    ) -> int:
         now = started_at or utc_now()
         with connect_db(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO runs(task_id, run_type, prompt, command, started_at, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO runs(task_id, run_type, prompt, command, output_path, started_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (task_id, run_type, prompt, command, now, now),
+                (task_id, run_type, prompt, command, output_path, now, now),
             )
             conn.commit()
             return int(cursor.lastrowid)
@@ -301,6 +380,43 @@ class Repository:
             row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         return dict(row) if row else None
 
+    def get_run_details(self, run_id: int) -> Optional[Dict]:
+        with connect_db(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT
+                  runs.*,
+                  tasks.repo_id,
+                  tasks.github_type,
+                  tasks.github_number,
+                  tasks.title
+                FROM runs
+                JOIN tasks ON tasks.id = runs.task_id
+                WHERE runs.id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_runs(self, repo_id: int, limit: int = 50) -> List[Dict]:
+        with connect_db(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                  runs.*,
+                  tasks.github_type,
+                  tasks.github_number,
+                  tasks.title
+                FROM runs
+                JOIN tasks ON tasks.id = runs.task_id
+                WHERE tasks.repo_id = ?
+                ORDER BY runs.id DESC
+                LIMIT ?
+                """,
+                (repo_id, max(1, int(limit))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_task_events(self, task_id: int) -> List[Dict]:
         with connect_db(self.db_path) as conn:
             rows = conn.execute(
@@ -315,5 +431,7 @@ class Repository:
         labels_json = task.get("labels_json") or "[]"
         task["labels"] = json.loads(labels_json)
         task["is_stale"] = bool(task.get("is_stale"))
+        task["has_open_linked_pr"] = bool(task.get("has_open_linked_pr"))
+        linked_pr_numbers_json = task.get("linked_pr_numbers_json") or "[]"
+        task["linked_pr_numbers"] = [int(number) for number in json.loads(linked_pr_numbers_json)]
         return task
-
