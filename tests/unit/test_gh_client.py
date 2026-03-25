@@ -58,7 +58,8 @@ def test_gh_client_builds_expected_commands(monkeypatch):
     assert prs[0]["github_state"] == "open"
     issue_commands = [cmd for cmd in commands if cmd[:3] == ["gh", "issue", "list"]]
     pr_commands = [cmd for cmd in commands if cmd[:3] == ["gh", "pr", "list"]]
-    edit_commands = [cmd for cmd in commands if cmd[:3] == ["gh", "pr", "edit"]]
+    issue_edit_commands = [cmd for cmd in commands if cmd[:3] == ["gh", "issue", "edit"]]
+    pr_edit_commands = [cmd for cmd in commands if cmd[:3] == ["gh", "pr", "edit"]]
 
     assert issue_commands
     assert len(issue_commands) == len(STATE_LABELS)
@@ -67,7 +68,8 @@ def test_gh_client_builds_expected_commands(monkeypatch):
         assert any(label in cmd for cmd in issue_commands)
         assert any(label in cmd for cmd in pr_commands)
     assert any("headRefOid" in cmd[cmd.index("--json") + 1] for cmd in pr_commands)
-    assert edit_commands
+    assert issue_edit_commands
+    assert not pr_edit_commands
 
 
 def test_gh_client_lists_open_pr_links(monkeypatch):

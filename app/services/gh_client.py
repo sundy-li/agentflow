@@ -126,9 +126,12 @@ class GHClient:
         if item_type not in ("issue", "pr"):
             raise ValueError("item_type must be issue or pr")
 
+        # Labels are issue metadata for both issues and pull requests.
+        # `gh pr edit` currently fails on some repos because its GraphQL query
+        # touches deprecated project fields, while `gh issue edit` succeeds.
         command = [
             "gh",
-            item_type,
+            "issue",
             "edit",
             str(number),
             "--repo",
