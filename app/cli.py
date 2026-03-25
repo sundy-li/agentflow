@@ -1,6 +1,7 @@
 import argparse
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -8,6 +9,8 @@ from app.config import get_active_repo, load_settings
 from app.constants import AGENT_APPROVED, AGENT_CHANGED, AGENT_ISSUE, AGENT_REVIEWABLE
 from app.db import run_migrations
 from app.repository import Repository
+from app.services.gh_client import GHClient
+from app.services.sync_service import SyncService
 
 STATE_ORDER = [
     AGENT_ISSUE,
@@ -60,6 +63,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if active_repo is None or not active_repo.enabled:
             print("No active repo configured.")
             return 1
+        sync_board(repository, active_repo)
         print(render_board(repository, active_repo))
         return 0
     if args.command == "runs":
@@ -78,6 +82,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 def render_board(repository: Repository, repo_cfg) -> str:
     repo_id = repository.ensure_repo(repo_cfg.name, repo_cfg.full_name, repo_cfg.enabled)
     tasks = repository.list_board_tasks(repo_id)
+    running_task_ids = set(repository.list_running_task_ids(repo_id))
     grouped: Dict[str, List[Dict]] = {state: [] for state in STATE_ORDER}
     for task in tasks:
         grouped.setdefault(task["state"], []).append(task)
@@ -87,8 +92,15 @@ def render_board(repository: Repository, repo_cfg) -> str:
         state_tasks = grouped.get(state, [])
         lines.append("")
         lines.append("[{0}] {1} tasks".format(state, len(state_tasks)))
-        lines.extend(_render_task_table(state_tasks))
+        lines.extend(_render_task_table(state_tasks, running_task_ids))
     return "\n".join(lines)
+
+
+def sync_board(repository: Repository, repo_cfg) -> None:
+    try:
+        SyncService(repository, GHClient()).sync_once(repo_cfg)
+    except Exception as exc:
+        print("Warning: board sync failed: {0}".format(exc), file=sys.stderr)
 
 
 def render_runs(repository: Repository, repo_cfg) -> str:
@@ -116,7 +128,7 @@ def inspect_run(repository: Repository, run_id: int, follow: bool = False, poll_
     return 0
 
 
-def _render_task_table(tasks: Iterable[Dict]) -> List[str]:
+def _render_task_table(tasks: Iterable[Dict], running_task_ids: Optional[set] = None) -> List[str]:
     header = " ".join(_pad(label, width) for label, width in TABLE_COLUMNS)
     divider = " ".join("-" * width for _, width in TABLE_COLUMNS)
     lines = [header, divider]
@@ -130,7 +142,7 @@ def _render_task_table(tasks: Iterable[Dict]) -> List[str]:
                     _pad(_truncate(task["title"], 32), 32),
                     _pad(task.get("assignee") or "-", 12),
                     _pad("yes" if task.get("is_stale") else "no", 5),
-                    _pad(_locked_status(task), 7),
+                    _pad(_locked_status(task, running_task_ids), 7),
                     _pad((task.get("updated_at") or "")[:20], 20),
                 ]
             )
@@ -204,8 +216,13 @@ def _output_size(output_path: Optional[str]) -> int:
     return path.stat().st_size
 
 
-def _locked_status(task: Dict) -> str:
-    if task.get("locked_by") or task.get("locked_until"):
+def _locked_status(task: Dict, running_task_ids: Optional[set] = None) -> str:
+    if running_task_ids and int(task["id"]) in running_task_ids:
+        return "running"
+    if task.get("blocked_reason"):
+        return "blocked"
+    locked_until = task.get("locked_until")
+    if locked_until and _parse_utc_timestamp(locked_until) > datetime.now(timezone.utc):
         return "running"
     return "idle"
 
@@ -224,6 +241,10 @@ def _truncate(value: str, width: int) -> str:
 
 def _pad(value: str, width: int) -> str:
     return value.ljust(width)
+
+
+def _parse_utc_timestamp(value: str) -> datetime:
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
 if __name__ == "__main__":

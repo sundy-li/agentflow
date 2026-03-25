@@ -4,10 +4,17 @@ from typing import Optional
 
 
 TASK_OPTIONAL_COLUMNS = {
+    "github_state": "TEXT NOT NULL DEFAULT 'open'",
     "pr_head_sha": "TEXT",
     "pr_last_push_observed_at": "TEXT",
     "has_open_linked_pr": "INTEGER NOT NULL DEFAULT 0",
     "linked_pr_numbers_json": "TEXT NOT NULL DEFAULT '[]'",
+    "blocked_reason": "TEXT",
+    "blocked_until": "TEXT",
+    "worktree_path": "TEXT",
+    "worktree_cleanup_attempted_at": "TEXT",
+    "worktree_cleanup_error": "TEXT",
+    "worktree_removed_at": "TEXT",
 }
 
 

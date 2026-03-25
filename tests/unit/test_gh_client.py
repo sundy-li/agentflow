@@ -52,8 +52,10 @@ def test_gh_client_builds_expected_commands(monkeypatch):
     )
 
     assert issues[0]["number"] == 1
+    assert issues[0]["github_state"] == "open"
     assert prs[0]["number"] == 2
     assert prs[0]["head_sha"] == "sha-1"
+    assert prs[0]["github_state"] == "open"
     issue_commands = [cmd for cmd in commands if cmd[:3] == ["gh", "issue", "list"]]
     pr_commands = [cmd for cmd in commands if cmd[:3] == ["gh", "pr", "list"]]
     edit_commands = [cmd for cmd in commands if cmd[:3] == ["gh", "pr", "edit"]]
@@ -93,3 +95,43 @@ def test_gh_client_lists_open_pr_links(monkeypatch):
     assert "--state" in commands[0]
     assert "open" in commands[0]
     assert "body" in commands[0][commands[0].index("--json") + 1]
+
+
+def test_gh_client_gets_pr_state(monkeypatch):
+    commands = []
+
+    def fake_run(command, capture_output, text, check, timeout):
+        commands.append(command)
+        if command[:3] == ["gh", "pr", "view"]:
+            payload = {"state": "CLOSED", "mergedAt": "2026-03-24T00:00:00Z"}
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    client = GHClient(timeout_seconds=1)
+
+    state = client.get_pr_state("owner/repo", 10)
+
+    assert state == "merged"
+    assert commands[0][:3] == ["gh", "pr", "view"]
+    assert "state,mergedAt" == commands[0][commands[0].index("--json") + 1]
+
+
+def test_gh_client_gets_issue_state(monkeypatch):
+    commands = []
+
+    def fake_run(command, capture_output, text, check, timeout):
+        commands.append(command)
+        if command[:3] == ["gh", "issue", "view"]:
+            payload = {"state": "CLOSED"}
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    client = GHClient(timeout_seconds=1)
+
+    state = client.get_issue_state("owner/repo", 12)
+
+    assert state == "closed"
+    assert commands[0][:3] == ["gh", "issue", "view"]
+    assert "state" == commands[0][commands[0].index("--json") + 1]

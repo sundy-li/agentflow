@@ -1,5 +1,6 @@
 import logging
 import os
+import inspect
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -17,6 +18,7 @@ class AgentScheduler:
         sync_service,
         worker_service,
         repo_cfg,
+        worktree_cleanup_service=None,
         interval_seconds: int = 60,
         enabled: bool = True,
         max_parallel_tasks: int = 4,
@@ -27,6 +29,7 @@ class AgentScheduler:
         self.sync_service = sync_service
         self.worker_service = worker_service
         self.repo_cfg = repo_cfg
+        self.worktree_cleanup_service = worktree_cleanup_service
         self.interval_seconds = interval_seconds
         self.enabled = enabled
         self.max_parallel_tasks = max(1, int(max_parallel_tasks))
@@ -88,7 +91,8 @@ class AgentScheduler:
             return {"synced": False, "executed": False, "executed_count": 0}
         logger.info("scheduler tick started repo=%s", self.repo_cfg.full_name)
         self._prune_finished_workers()
-        self.sync_service.sync_once(self.repo_cfg)
+        sync_summary = self.sync_service.sync_once(self.repo_cfg)
+        self._run_worktree_cleanup(sync_summary)
         if self._shutdown_event.is_set():
             return {"synced": True, "executed": False, "executed_count": 0}
         self._prune_finished_workers()
@@ -103,6 +107,21 @@ class AgentScheduler:
         )
         return result
 
+    def _run_worktree_cleanup(self, sync_summary: Optional[Dict]) -> None:
+        if self.worktree_cleanup_service is None or self._shutdown_event.is_set():
+            return
+        stale_pr_task_ids = []
+        if isinstance(sync_summary, dict):
+            stale_pr_task_ids = list(sync_summary.get("stale_pr_task_ids") or [])
+        try:
+            self.worktree_cleanup_service.cleanup_repo(self.repo_cfg, stale_pr_task_ids=stale_pr_task_ids)
+        except Exception:
+            logger.exception(
+                "scheduler worktree cleanup failed repo=%s stale_pr_task_ids=%s",
+                getattr(self.repo_cfg, "full_name", None),
+                stale_pr_task_ids,
+            )
+
     def _dispatch_worker_batch(self) -> int:
         if self._shutdown_event.is_set():
             return 0
@@ -112,11 +131,16 @@ class AgentScheduler:
             if self._shutdown_event.is_set():
                 break
             try:
-                future = self._executor.submit(
-                    self.worker_service.process_one,
-                    self.repo_cfg,
-                    review_latency_hours=self.review_latency_hours,
-                )
+                active_task_ids = []
+                active_task_ids_fn = getattr(self.worker_service, "active_task_ids", None)
+                if callable(active_task_ids_fn):
+                    active_task_ids = list(active_task_ids_fn())
+                process_one = self.worker_service.process_one
+                parameters = inspect.signature(process_one).parameters
+                submit_kwargs = {"review_latency_hours": self.review_latency_hours}
+                if "exclude_task_ids" in parameters:
+                    submit_kwargs["exclude_task_ids"] = active_task_ids
+                future = self._executor.submit(process_one, self.repo_cfg, **submit_kwargs)
             except RuntimeError:
                 logger.info("scheduler executor is shutting down repo=%s", getattr(self.repo_cfg, "full_name", None))
                 break

@@ -1,6 +1,8 @@
 import io
 import logging
 
+from app.config import AppSettings, CodexSettings, DatabaseSettings, RepoSettings, SchedulerSettings, UISettings
+from app.main import create_app
 from app.main import configure_app_logging
 
 
@@ -33,3 +35,19 @@ def test_configure_app_logging_uses_uvicorn_handlers():
         app_logger.setLevel(original_app_level)
         app_logger.propagate = original_app_propagate
         uvicorn_logger.handlers = original_uvicorn_handlers
+
+
+def test_create_app_exposes_coding_agent_runner(tmp_path):
+    settings = AppSettings(
+        database=DatabaseSettings(path=str(tmp_path / "app.db")),
+        scheduler=SchedulerSettings(enabled=False, poll_interval_seconds=60),
+        codex=CodexSettings(command="codex", args=[], timeout_seconds=60),
+        ui=UISettings(refresh_seconds=1),
+        repos=[RepoSettings(name="demo", full_name="owner/repo", enabled=True)],
+        run_logs_dir=str(tmp_path / "runs"),
+    )
+
+    app = create_app(settings=settings)
+
+    assert app.state.coding_agent_runner is not None
+    assert app.state.codex_runner is app.state.coding_agent_runner

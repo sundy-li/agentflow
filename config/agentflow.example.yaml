@@ -3,14 +3,32 @@ database:
 
 scheduler:
   enabled: true
-  poll_interval_seconds: 60
+  poll_interval_seconds: 300
   max_parallel_tasks: 4
   review_latency_hours: 0
 
-codex:
-  command: codex
-  args: []
-  timeout_seconds: 1800
+
+coding_agents:
+  default:
+    kind: codex
+    command: codex
+    args: ["--dangerously-bypass-approvals-and-sandbox"]
+    timeout_seconds: 1800
+  claude:
+    kind: claude_code
+    command: claude
+    args: [--output-format, text]
+    timeout_seconds: 1800
+  opencode:
+    kind: opencode
+    command: opencode
+    args: []
+    timeout_seconds: 1800
+
+task_agents:
+  implement: claude
+  fix: opencode
+  review: default
 
 ui:
   refresh_seconds: 5

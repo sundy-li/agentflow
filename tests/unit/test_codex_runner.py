@@ -4,13 +4,22 @@ from pathlib import Path
 
 import pytest
 
-from app.config import CodexSettings
+from app.config import AppSettings, CodingAgentSettings, CodexSettings, TaskAgentSettings
 from app.repository import Repository
-from app.services.codex_runner import CodexRunner
+from app.services.coding_agent_runner import CodingAgentRunner
+
+
+def build_settings(run_logs_dir, codex=None, coding_agents=None, task_agents=None):
+    return AppSettings(
+        codex=codex or CodexSettings(command="codex", args=[], timeout_seconds=20),
+        coding_agents=coding_agents or {},
+        task_agents=TaskAgentSettings(**(task_agents or {})),
+        run_logs_dir=str(run_logs_dir),
+    )
 
 
 def test_build_prompt_uses_worktree_template_for_implement_mode():
-    prompt = CodexRunner._build_prompt(
+    prompt = CodingAgentRunner._build_prompt(
         {
             "title": "Run task",
             "url": "https://example.com/issue/3",
@@ -30,8 +39,47 @@ def test_build_prompt_uses_worktree_template_for_implement_mode():
     assert "Fixes #3" in prompt
 
 
+def test_build_prompt_uses_followup_template_when_pr_is_missing():
+    prompt = CodingAgentRunner._build_prompt(
+        {
+            "title": "Run task",
+            "url": "https://example.com/issue/3",
+            "github_number": 3,
+            "repo_full_name": "sundy-li/agentflow",
+            "repo_forked": "sundy-li/agentflow-fork",
+            "repo_default_branch": "main",
+            "pr_followup_only": True,
+        },
+        mode="implement",
+    )
+
+    assert "Previous implement run completed, but no linked pull request was detected." in prompt
+    assert "Do not re-implement the fix from scratch." in prompt
+    assert "create or update the pull request" in prompt
+    assert "Fixes #3" in prompt
+
+
+def test_build_prompt_followup_includes_previous_delivery_context():
+    prompt = CodingAgentRunner._build_prompt(
+        {
+            "title": "Run task",
+            "url": "https://example.com/issue/3",
+            "github_number": 3,
+            "repo_full_name": "sundy-li/agentflow",
+            "repo_forked": "sundy-li/agentflow-fork",
+            "repo_default_branch": "main",
+            "pr_followup_only": True,
+            "delivery_context": "Previous delivery context:\n- Worktree: /tmp/demo/.worktrees/issue-3-1",
+        },
+        mode="implement",
+    )
+
+    assert "Previous delivery context:" in prompt
+    assert "/tmp/demo/.worktrees/issue-3-1" in prompt
+
+
 def test_build_prompt_uses_worktree_template_for_fix_mode():
-    prompt = CodexRunner._build_prompt(
+    prompt = CodingAgentRunner._build_prompt(
         {
             "title": "Fix task",
             "url": "https://example.com/pr/5",
@@ -49,7 +97,7 @@ def test_build_prompt_uses_worktree_template_for_fix_mode():
 
 
 def test_build_prompt_does_not_require_worktree_for_review_mode():
-    prompt = CodexRunner._build_prompt(
+    prompt = CodingAgentRunner._build_prompt(
         {
             "title": "Review task",
             "url": "https://example.com/pr/4",
@@ -65,7 +113,54 @@ def test_build_prompt_does_not_require_worktree_for_review_mode():
     assert "git worktree" not in prompt
 
 
-def test_codex_runner_records_run_and_output(tmp_path, repository: Repository):
+def test_compose_command_supports_codex():
+    command = CodingAgentRunner._compose_command(
+        prompt="Implement this change",
+        agent_settings=CodingAgentSettings(kind="codex", command="codex", args=["--full-auto"], timeout_seconds=60),
+    )
+
+    assert command == ["codex", "exec", "--full-auto", "Implement this change"]
+
+
+def test_compose_command_supports_claude_code():
+    command = CodingAgentRunner._compose_command(
+        prompt="Review this change",
+        agent_settings=CodingAgentSettings(kind="claude_code", command="claude", args=["--output-format", "text"], timeout_seconds=60),
+    )
+
+    assert command == ["claude", "--print", "--output-format", "text", "Review this change"]
+
+
+def test_compose_command_supports_opencode():
+    command = CodingAgentRunner._compose_command(
+        prompt="Fix this branch",
+        agent_settings=CodingAgentSettings(kind="opencode", command="opencode", args=["--agent", "reviewer"], timeout_seconds=60),
+    )
+
+    assert command == ["opencode", "run", "--agent", "reviewer", "Fix this branch"]
+
+
+def test_runner_resolves_different_agents_per_mode(tmp_path, repository: Repository):
+    runner = CodingAgentRunner(
+        repository,
+        build_settings(
+            tmp_path / "runs",
+            codex=CodexSettings(command="legacy-codex", args=[], timeout_seconds=20),
+            coding_agents={
+                "default": CodingAgentSettings(kind="codex", command="codex", args=["--full-auto"], timeout_seconds=20),
+                "claude": CodingAgentSettings(kind="claude_code", command="claude", args=["--output-format", "text"], timeout_seconds=30),
+                "opencode": CodingAgentSettings(kind="opencode", command="opencode", args=["--agent", "fixer"], timeout_seconds=40),
+            },
+            task_agents={"implement": "claude", "fix": "opencode", "review": "default"},
+        ),
+    )
+
+    assert runner._resolve_agent_settings("implement").kind == "claude_code"
+    assert runner._resolve_agent_settings("fix").kind == "opencode"
+    assert runner._resolve_agent_settings("review").command == "codex"
+
+
+def test_coding_agent_runner_records_run_and_output(tmp_path, repository: Repository):
     repo_id = repository.ensure_repo("demo", "owner/repo")
     task = repository.upsert_task(
         repo_id=repo_id,
@@ -77,17 +172,20 @@ def test_codex_runner_records_run_and_output(tmp_path, repository: Repository):
         state="agent-issue",
     )
     run_logs = tmp_path / "runs"
-    settings = CodexSettings(
-        command="python3",
-        args=["-c", "print('hello from codex');"],
-        timeout_seconds=20,
+    settings = build_settings(
+        run_logs,
+        codex=CodexSettings(
+            command="python3",
+            args=["-c", "print('hello from codex');"],
+            timeout_seconds=20,
+        ),
     )
-    runner = CodexRunner(repository, settings, str(run_logs))
+    runner = CodingAgentRunner(repository, settings)
     task_with_repo = dict(task)
     task_with_repo["repo_full_name"] = "sundy-li/agentflow"
     task_with_repo["repo_forked"] = "sundy-li/agentflow-fork"
     task_with_repo["repo_default_branch"] = "main"
-    result = runner.run_codex(task_with_repo, mode="implement")
+    result = runner.run_task(task_with_repo, mode="implement")
 
     assert result.exit_code == 0
     assert result.result == "success"
@@ -100,7 +198,7 @@ def test_codex_runner_records_run_and_output(tmp_path, repository: Repository):
     assert "targeting 'main'" in run_row["prompt"]
 
 
-def test_codex_runner_handles_nonzero_exit(tmp_path, repository: Repository):
+def test_coding_agent_runner_handles_nonzero_exit(tmp_path, repository: Repository):
     repo_id = repository.ensure_repo("demo", "owner/repo")
     task = repository.upsert_task(
         repo_id=repo_id,
@@ -112,20 +210,23 @@ def test_codex_runner_handles_nonzero_exit(tmp_path, repository: Repository):
         state="agent-reviewable",
     )
     run_logs = tmp_path / "runs"
-    settings = CodexSettings(
-        command="python3",
-        args=["-c", "import sys; sys.exit(2)"],
-        timeout_seconds=20,
+    settings = build_settings(
+        run_logs,
+        codex=CodexSettings(
+            command="python3",
+            args=["-c", "import sys; sys.exit(2)"],
+            timeout_seconds=20,
+        ),
     )
-    runner = CodexRunner(repository, settings, str(run_logs))
-    result = runner.run_codex(task, mode="review")
+    runner = CodingAgentRunner(repository, settings)
+    result = runner.run_task(task, mode="review")
 
     assert result.exit_code == 2
     run_row = repository.get_run(result.run_id)
     assert run_row["result"] == "failed"
 
 
-def test_codex_runner_uses_repo_workspace_as_cwd(tmp_path, repository: Repository, monkeypatch):
+def test_coding_agent_runner_uses_repo_workspace_as_cwd(tmp_path, repository: Repository, monkeypatch):
     repo_id = repository.ensure_repo("demo", "owner/repo")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -148,10 +249,10 @@ def test_codex_runner_uses_repo_workspace_as_cwd(tmp_path, repository: Repositor
         log_file.write(b"workspace ok\n")
         return 0
 
-    monkeypatch.setattr(CodexRunner, "_run_with_pty", staticmethod(fake_run_with_pty))
-    runner = CodexRunner(repository, CodexSettings(command="codex", args=[], timeout_seconds=20), str(tmp_path / "runs"))
+    monkeypatch.setattr(CodingAgentRunner, "_run_with_pty", staticmethod(fake_run_with_pty))
+    runner = CodingAgentRunner(repository, build_settings(tmp_path / "runs"))
 
-    result = runner.run_codex(task_with_repo, mode="implement")
+    result = runner.run_task(task_with_repo, mode="implement")
 
     assert result.exit_code == 0
     assert captured["cwd"] == str(workspace)
@@ -169,21 +270,24 @@ def test_run_with_pty_attaches_terminal_to_stdin(tmp_path, repository: Repositor
         state="agent-issue",
     )
     run_logs = tmp_path / "runs"
-    settings = CodexSettings(
-        command="python3",
-        args=["-c", "import os,sys; print('stdin_tty=' + str(os.isatty(0))); sys.exit(0 if os.isatty(0) else 1)"],
-        timeout_seconds=20,
+    settings = build_settings(
+        run_logs,
+        codex=CodexSettings(
+            command="python3",
+            args=["-c", "import os,sys; print('stdin_tty=' + str(os.isatty(0))); sys.exit(0 if os.isatty(0) else 1)"],
+            timeout_seconds=20,
+        ),
     )
-    runner = CodexRunner(repository, settings, str(run_logs))
+    runner = CodingAgentRunner(repository, settings)
 
-    result = runner.run_codex(task, mode="implement")
+    result = runner.run_task(task, mode="implement")
 
     assert result.exit_code == 0
     log_text = Path(result.output_path).read_text(encoding="utf-8")
     assert "stdin_tty=True" in log_text
 
 
-def test_codex_runner_uses_exec_subcommand_for_codex_cli(tmp_path, repository: Repository, monkeypatch):
+def test_coding_agent_runner_uses_exec_subcommand_for_codex_cli(tmp_path, repository: Repository, monkeypatch):
     repo_id = repository.ensure_repo("demo", "owner/repo")
     task = repository.upsert_task(
         repo_id=repo_id,
@@ -201,18 +305,20 @@ def test_codex_runner_uses_exec_subcommand_for_codex_cli(tmp_path, repository: R
         log_file.write(b"ok\n")
         return 0
 
-    monkeypatch.setattr(CodexRunner, "_run_with_pty", staticmethod(fake_run_with_pty))
-    runner = CodexRunner(
+    monkeypatch.setattr(CodingAgentRunner, "_run_with_pty", staticmethod(fake_run_with_pty))
+    runner = CodingAgentRunner(
         repository,
-        CodexSettings(
-            command="codex",
-            args=["--dangerously-bypass-approvals-and-sandbox"],
-            timeout_seconds=20,
+        build_settings(
+            tmp_path / "runs",
+            codex=CodexSettings(
+                command="codex",
+                args=["--dangerously-bypass-approvals-and-sandbox"],
+                timeout_seconds=20,
+            ),
         ),
-        str(tmp_path / "runs"),
     )
 
-    result = runner.run_codex(task, mode="implement")
+    result = runner.run_task(task, mode="implement")
 
     assert result.exit_code == 0
     assert captured["command"][0] == "codex"
@@ -220,7 +326,7 @@ def test_codex_runner_uses_exec_subcommand_for_codex_cli(tmp_path, repository: R
     assert "--dangerously-bypass-approvals-and-sandbox" in captured["command"]
 
 
-def test_codex_runner_shutdown_stops_active_run(tmp_path, repository: Repository):
+def test_coding_agent_runner_shutdown_stops_active_run(tmp_path, repository: Repository):
     repo_id = repository.ensure_repo("demo", "owner/repo")
     task = repository.upsert_task(
         repo_id=repo_id,
@@ -231,19 +337,21 @@ def test_codex_runner_shutdown_stops_active_run(tmp_path, repository: Repository
         labels=["agent-issue"],
         state="agent-issue",
     )
-    runner = CodexRunner(
+    runner = CodingAgentRunner(
         repository,
-        CodexSettings(
-            command="python3",
-            args=["-c", "import time; print('started', flush=True); time.sleep(30)"],
-            timeout_seconds=60,
+        build_settings(
+            tmp_path / "runs",
+            codex=CodexSettings(
+                command="python3",
+                args=["-c", "import time; print('started', flush=True); time.sleep(30)"],
+                timeout_seconds=60,
+            ),
         ),
-        str(tmp_path / "runs"),
     )
     shutdown = runner.shutdown
     result_holder = {}
 
-    thread = threading.Thread(target=lambda: result_holder.setdefault("result", runner.run_codex(task, mode="implement")))
+    thread = threading.Thread(target=lambda: result_holder.setdefault("result", runner.run_task(task, mode="implement")))
     thread.start()
     deadline = time.time() + 5
     while time.time() < deadline:

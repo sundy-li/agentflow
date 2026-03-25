@@ -26,6 +26,16 @@ def test_board_api_and_page(tmp_path):
         labels=["agent-issue"],
         state="agent-issue",
     )
+    repository.upsert_task(
+        repo_id=repo_id,
+        github_type="pr",
+        github_number=22,
+        title="Merged task",
+        url="https://example.com/22",
+        labels=["agent-approved"],
+        state="agent-approved",
+        github_state="merged",
+    )
     repository.insert_task_event(
         task_id=task["id"],
         from_state=None,
@@ -41,6 +51,7 @@ def test_board_api_and_page(tmp_path):
     data = board_response.json()
     assert data["repo"] == "owner/repo"
     assert len(data["columns"]["agent-issue"]) == 1
+    assert len(data["columns"]["agent-approved"]) == 0
 
     event_response = client.get("/api/tasks/{0}/events".format(task["id"]))
     assert event_response.status_code == 200
@@ -49,4 +60,3 @@ def test_board_api_and_page(tmp_path):
     page_response = client.get("/board")
     assert page_response.status_code == 200
     assert "Agentflow Board" in page_response.text
-

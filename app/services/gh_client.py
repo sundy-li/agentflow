@@ -49,6 +49,40 @@ class GHClient:
             )
         return linked_prs
 
+    def get_pr_state(self, repo_full_name: str, number: int) -> str:
+        command = [
+            "gh",
+            "pr",
+            "view",
+            str(number),
+            "--repo",
+            repo_full_name,
+            "--json",
+            "state,mergedAt",
+        ]
+        output = self._run(command)
+        payload = json.loads(output or "{}")
+        if payload.get("mergedAt"):
+            return "merged"
+        state = str(payload.get("state") or "").strip().lower()
+        return state or "unknown"
+
+    def get_issue_state(self, repo_full_name: str, number: int) -> str:
+        command = [
+            "gh",
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            repo_full_name,
+            "--json",
+            "state",
+        ]
+        output = self._run(command)
+        payload = json.loads(output or "{}")
+        state = str(payload.get("state") or "").strip().lower()
+        return state or "unknown"
+
     def _list_agent_items(self, repo_full_name: str, item_type: str) -> List[Dict]:
         merged = {}
         json_fields = "number,title,url,labels,assignees,updatedAt"
@@ -138,6 +172,7 @@ class GHClient:
             "labels": labels,
             "assignee": assignee,
             "updated_at": item.get("updatedAt"),
+            "github_state": "open",
             "head_sha": item.get("headRefOid") if github_type == "pr" else None,
         }
 

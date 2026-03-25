@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.config import AppSettings, CodexSettings, DatabaseSettings, RepoSettings, SchedulerSettings, UISettings
 from app.repository import Repository
-from app.services.codex_runner import RunResult
+from app.services.coding_agent_runner import RunResult
 from app.services.worker_service import WorkerService
 from app.main import create_app
 
@@ -10,6 +10,7 @@ from app.main import create_app
 class FakeGH:
     def __init__(self):
         self.updated = []
+        self.links = [{"number": 101, "linked_issue_numbers": [100]}]
 
     def set_labels(self, repo_full_name, item_type, number, add_labels, remove_labels):
         self.updated.append(
@@ -22,6 +23,9 @@ class FakeGH:
             }
         )
 
+    def list_open_pr_links(self, repo_full_name):
+        return list(self.links)
+
 
 class FakeRunner:
     def __init__(self):
@@ -31,10 +35,13 @@ class FakeRunner:
         ]
         self.index = 0
 
-    def run_codex(self, task, mode):
+    def run_task(self, task, mode):
         result = self.results[self.index]
         self.index += 1
         return result
+
+    def run_codex(self, task, mode):
+        return self.run_task(task, mode)
 
 
 def test_single_repo_happy_path(tmp_path):
@@ -83,6 +90,6 @@ def test_single_repo_happy_path(tmp_path):
 
     client = TestClient(app)
     board = client.get("/api/board").json()
-    assert any(task["number"] == 100 for task in board["columns"]["agent-issue"])
+    assert not any(task["number"] == 100 for task in board["columns"]["agent-issue"])
     assert any(task["number"] == 101 for task in board["columns"]["agent-approved"])
     assert len(fake_gh.updated) == 1

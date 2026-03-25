@@ -2,6 +2,7 @@ AGENT_ISSUE = "agent-issue"
 AGENT_REVIEWABLE = "agent-reviewable"
 AGENT_CHANGED = "agent-changed"
 AGENT_APPROVED = "agent-approved"
+MISSING_PR_AFTER_IMPLEMENT = "missing_pr_after_implement"
 
 STATE_LABELS = [
     AGENT_ISSUE,
@@ -15,4 +16,3 @@ RUNNABLE_STATES = [
     AGENT_REVIEWABLE,
     AGENT_CHANGED,
 ]
-

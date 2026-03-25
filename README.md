@@ -1,12 +1,13 @@
 # agentflow
 
 Label-driven GitHub agent orchestration service.
+[中文](./AGENTFLOW_ZH.md)
 
 ## What It Does
 
 - Polls one configured GitHub repo using `gh` CLI
 - Syncs `agent-issue`, `agent-reviewable`, and `agent-changed` tasks into SQLite
-- Runs local `codex` command via PTY for implement/review/fix workflows
+- Runs local coding agent CLIs via PTY for implement/review/fix workflows
 - Writes lifecycle transitions and execution runs to DB
 - Exposes FastAPI board:
 - `GET /board`
@@ -40,10 +41,20 @@ cp config/agentflow.example.yaml config/agentflow.yaml
 - `forked`: fork repo used for push (for example `your-user/agentflow`)
 - `default_branch`: PR target branch (default `main`)
 
+Coding agent config supports:
+- `coding_agents`: named agent profiles
+- `task_agents`: per-mode routing for `implement`, `fix`, and `review`
+- legacy `codex:` remains supported as the fallback default profile
+
+Supported agent kinds:
+- `codex`
+- `claude_code`
+- `opencode`
+
 3. Run service:
 
 ```bash
-AGENTFLOW_CONFIG=config/agentflow.yaml uv run uvicorn app.main:create_app --factory --reload
+AGENTFLOW_CONFIG=config/agentflow.yaml uv run uvicorn app.main:create_app --factory --port 8000
 ```
 
 Local CLI board:
@@ -59,7 +70,7 @@ uv run python -m app.cli board --config config/agentflow.yaml
 ## Notes
 
 - `gh` must already be authenticated (`gh auth status`).
-- `codex` command must be available in `PATH`.
+- At least one configured coding agent command must be available in `PATH`.
 - Run logs are written into `run_logs_dir`.
 
 ## Test
