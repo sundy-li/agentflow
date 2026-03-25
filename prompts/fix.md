@@ -4,7 +4,7 @@ URL: {{url}}
 {{repo_context}}
 Read all comments and failed ci about this pull request. Apply fixes and update the branch.
 
-Use git worktree to reuse or create a dedicated worktree for this task.
+Use git worktree to reuse(default to `{REPO_DIR}/.worktrees/pr-fix-{ISSUE_NUMBER}`) or create a dedicated worktree for this task.
 Push updates to fork repository '{{repo_forked}}' (not upstream).
 Ensure PR targets upstream '{{repo_full_name}}' branch '{{default_branch}}'.
 
